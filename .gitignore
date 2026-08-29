@@ -56,3 +56,8 @@ out/*.s
 
 # Keep the asset-conversion script -- the generic *.cmd rule above would otherwise hide it
 !gfx/convert.cmd
+
+# VSCode workspace settings. The amiga-debug extension writes an absolute, machine-specific
+# toolchain path (m68k.includePaths) into this file on activation, so it cannot be shared.
+# See .vscode/settings.json.example for the project-level settings.
+.vscode/settings.json

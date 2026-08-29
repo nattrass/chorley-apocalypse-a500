@@ -1,0 +1,10 @@
+{
+    "//": "Project-level VSCode settings. Copy to settings.json - that file is gitignored.",
+    "//2": "Do NOT commit settings.json: the amiga-debug extension writes m68k.includePaths and",
+    "//3": "m68k.vasm.provideDiagnostics into it on activation, as an absolute path containing",
+    "//4": "your username and the installed extension version. It regenerates them itself, so",
+    "//5": "there is nothing to copy here - just open the project in VSCode.",
+    "[m68k]": {
+        "editor.rulers": []
+    }
+}

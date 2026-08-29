@@ -1,4 +1,5 @@
 #include "support/gcc8_c_support.h"
+#include "game/gamedefs.h"
 #include <proto/exec.h>
 #include <proto/dos.h>
 #include <proto/graphics.h>
