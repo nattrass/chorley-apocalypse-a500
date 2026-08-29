@@ -51,8 +51,9 @@ Module.symvers
 Mkfile.old
 dkms.conf
 
-# Amiga build output (out/a.s disassembly; a.exe/a.elf/a.map covered by the rules above)
+# Amiga build output (disassembly and intermediate files; a.exe/a.elf/a.map covered by the rules above)
 out/*.s
+a500.s
 
 # Keep the asset-conversion script -- the generic *.cmd rule above would otherwise hide it
 !gfx/convert.cmd
