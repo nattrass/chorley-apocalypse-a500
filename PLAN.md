@@ -52,6 +52,8 @@ The single most important milestone in the project.
 **Done when:** you can scroll the whole 2048x2048 map smoothly, no tearing, no glitch at any wrap
 boundary, holding 50Hz.
 
+**Current status:** M1 is complete. The procedural 32-tile sheet with high-contrast numbers and 32-color palette has been implemented, along with the procedural 128x128 Chorley map (2048x2048 px), double-wide 704x272 playfield buffer, double-buffered copper lists with seamless vertical wrap and 48-line HUD split, blitter edge seam updates, and 50Hz joystick/manual/auto scrolling with background P61 music playback.
+
 > **GATE — profile before going further.** Measure with the extension's profiler. You need
 > **≥40% of the frame still free** with nothing but scrolling on screen; bobs will eat the rest.
 > If it fails, the fallbacks in order: narrow the buffer and accept a hitch at wrap; drop the view
@@ -201,4 +203,4 @@ A1200 is not a scope lever, it is a different project.
 
 ## Current position
  
-M0 is complete: the demo has been split into modular components, system takeover/restore is clean, and the P61 mod player is fully functional. **Next action: proceed with M1 (Scrolling tilemap).**
+M1 is complete: the 50Hz 4-way scrolling tilemap engine, 128x128 map, double-wide playfield, vertical copper wrap, and HUD split are verified and running. **Next action: proceed with M2 (Player character, 8-way movement, 8-way independent fire, and bob restore-behind over scrolling background).**

@@ -1,6 +1,8 @@
-#ifndef COPPER_H
-#define COPPER_H
+#pragma once
+#ifndef CHORLEY_COPPER_H
+#define CHORLEY_COPPER_H
 
+#include "support/gcc8_c_support.h"
 #include <exec/types.h>
 #include <hardware/custom.h>
 
@@ -56,4 +58,4 @@ __attribute__((always_inline)) inline USHORT* screenScanDefault(USHORT* copListE
 	return copListEnd;
 }
 
-#endif // COPPER_H
+#endif // CHORLEY_COPPER_H
