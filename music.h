@@ -8,7 +8,7 @@ int p61Init(const void* module);
 void p61Music();
 void p61End();
 
-extern const UBYTE module[];
+extern const void* module;
 #endif // MUSIC
 
 #endif // MUSIC_H

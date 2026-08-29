@@ -30,7 +30,6 @@ INCBIN(colors, "image.pal")
 
 // Put copper2 into chip mem so we can use it without copying
 const UWORD copper2[] __attribute__((section (".MEMF_CHIP"))) = {
-	offsetof(struct Custom, color[0]), 0x0000,
 	0xffff, 0xfffe // end copper list
 };
 
@@ -43,12 +42,11 @@ static void Wait10() {
 }
 
 static __attribute__((interrupt)) void interruptHandler() {
-	// ThePlayer uses EXTER; clear both interrupt sources so the IRQ line is not stuck.
+	// This handler owns VBL only. P61 uses EXTER for audio-DMA timing, so do
+	// not acknowledge it here or its level-6 player code will miss the event.
 	custom->intreq = (1 << INTB_VERTB); custom->intreq = (1 << INTB_VERTB); // reset vbl req twice for a4000 bug
-	custom->intreq = (1 << INTB_EXTER); custom->intreq = (1 << INTB_EXTER); // clear external interrupt state
 
 #ifdef MUSIC
-	// ThePlayer
 	p61Music();
 #endif
 
@@ -123,7 +121,8 @@ int main() {
 	custom->cop2lc = (ULONG)copper2;
 	custom->dmacon = DMAF_BLITTER;//disable blitter dma for copjmp bug
 	custom->copjmp1 = 0x7fff; //start copper
-	custom->dmacon = DMAF_SETCLR | DMAF_MASTER | DMAF_RASTER | DMAF_COPPER | DMAF_BLITTER | DMAF_AUDIO;
+
+	custom->dmacon = DMAF_SETCLR | DMAF_MASTER | DMAF_RASTER | DMAF_COPPER | DMAF_BLITTER;
 
 	// Install interrupt handler
 	SetInterruptHandler((APTR)interruptHandler);
@@ -133,8 +132,7 @@ int main() {
 	custom->intena = INTF_SETCLR | INTF_INTEN | INTF_VERTB;
 #endif
 
-	custom->intreq = (1 << INTB_VERTB) | (1 << INTB_EXTER); // reset VBL + EXTER requests
-	custom->intreq = (1 << INTB_VERTB) | (1 << INTB_EXTER);
+	custom->intreq = 1 << INTB_VERTB;
 
 	// Main game loop
 	while (!MouseLeft()) {

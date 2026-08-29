@@ -38,11 +38,7 @@ Break the template demo into modules and leave a game loop behind.
 **Done when:** builds, runs, black screen, music plays, LMB exits cleanly, and no AmigaOS call
 happens between `TakeSystem()` and `FreeSystem()`.
 
-**Current status:** the M0 split is largely complete: `main.cpp` now coordinates init/loop/exit,
-`system.cpp` owns takeover/restore and interrupt plumbing, `music.cpp` contains the P61 glue, and
-`copper.h` holds the copper helpers. The binary builds, boots to a black screen, and exits cleanly
-with LMB. The remaining blocker is audio: the module loads and the player init succeeds, but the
-sound output is still not heard in WinUAE, so this milestone is not yet considered complete.
+**Current status:** M0 is complete: `main.cpp` coordinates init/loop/exit, `system.cpp` owns takeover/restore and interrupt plumbing, `music.cpp` contains the P61 glue, and `copper.h` holds the copper helpers. The P61 pointer type declaration and EXTER interrupt handling have been corrected, and the binary builds, boots to a black screen, plays music, and exits cleanly with LMB.
 
 ### M1 — Scrolling tilemap ← *the big risk*
 The single most important milestone in the project.
@@ -204,9 +200,5 @@ A1200 is not a scope lever, it is a different project.
 - Update [DESIGN.md](DESIGN.md) when a design decision changes. A stale bible is worse than none.
 
 ## Current position
-
-M0 is in progress and functionally close: the demo has been split into modules, the black-screen
-launch loop works, and the clean system takeover/restore path is in place. The open issue is sound:
-the P61 init succeeds but the music still does not emit in WinUAE, so this milestone is blocked on
-audio debugging rather than structure. **Next action: finish the M0 sound fix and re-validate the
-milestone exit criteria.**
+ 
+M0 is complete: the demo has been split into modular components, system takeover/restore is clean, and the P61 mod player is fully functional. **Next action: proceed with M1 (Scrolling tilemap).**
