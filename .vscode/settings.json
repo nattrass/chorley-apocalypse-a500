@@ -1,6 +1,6 @@
 {
     "m68k.includePaths": [
-        "c:\\Users\\paul_\\.vscode\\extensions\\bartmanabyss.amiga-debug-1.7.2\\bin\\win32\\opt\\m68k-amiga-elf\\sys-include"
+        "c:\\Users\\PaulNattrass\\.vscode\\extensions\\bartmanabyss.amiga-debug-1.8.2\\bin\\win32\\opt\\m68k-amiga-elf\\sys-include"
     ],
     "m68k.vasm.provideDiagnostics": false,
     "[m68k]": {

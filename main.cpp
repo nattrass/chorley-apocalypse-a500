@@ -315,23 +315,6 @@ static __attribute__((interrupt)) void interruptHandler() {
 	frameCounter++;
 }
 
-#ifdef __cplusplus
-	class TestClass {
-	public:
-		TestClass(int y) {
-			static int x = 7;
-			i = y + x;
-		}
-		~TestClass() {
-			KPrintF("~TestClass()");
-		}
-
-		int i;
-	};
-
-	TestClass staticClass(4);
-#endif
-
 // set up a 320x256 lowres display
 __attribute__((always_inline)) inline USHORT* screenScanDefault(USHORT* copListEnd) {
 	const USHORT x=129;
@@ -355,9 +338,6 @@ __attribute__((always_inline)) inline USHORT* screenScanDefault(USHORT* copListE
 }
 
 static void Wait10() { WaitLine(0x10); }
-static void Wait11() { WaitLine(0x11); }
-static void Wait12() { WaitLine(0x12); }
-static void Wait13() { WaitLine(0x13); }
 
 int main() {
 	SysBase = *((struct ExecBase**)4UL);
@@ -373,14 +353,6 @@ int main() {
 	if (!DOSBase)
 		Exit(0);
 
-#ifdef __cplusplus
-	KPrintF("Hello debugger from Amiga: %ld!\n", staticClass.i);
-#else
-	KPrintF("Hello debugger from Amiga!\n");
-#endif
-	Write(Output(), (APTR)"Hello console!\n", 15);
-	Delay(50);
-
 	warpmode(1);
 	// TODO: precalc stuff here
 #ifdef MUSIC
@@ -391,11 +363,6 @@ int main() {
 
 	TakeSystem();
 	WaitVbl();
-
-	char* test = (char*)AllocMem(2502, MEMF_ANY);
-	memset(test, 0xcd, 2502);
-	memclr(test + 2, 2502 - 4);
-	FreeMem(test, 2502);
 
 	USHORT* copper1 = (USHORT*)AllocMem(1024, MEMF_CHIP);
 	USHORT* copPtr = copper1;
@@ -456,7 +423,6 @@ int main() {
 
 	while(!MouseLeft()) {
 		Wait10();
-		int f = frameCounter & 255;
 
 		// clear
 		WaitBlit();
@@ -486,12 +452,6 @@ int main() {
 			custom->bltafwm = custom->bltalwm = 0xffff;
 			custom->bltsize = ((16 * 5) << HSIZEBITS) | (32/16);
 		}
-
-		// WinUAE debug overlay test
-		debug_clear();
-		debug_filled_rect(f + 100, 200*2, f + 400, 220*2, 0x0000ff00); // 0x00RRGGBB
-		debug_rect(f + 90, 190*2, f + 400, 220*2, 0x000000ff); // 0x00RRGGBB
-		debug_text(f+ 130, 209*2, "This is a WinUAE debug overlay", 0x00ff00ff);
 	}
 
 #ifdef MUSIC

@@ -14,9 +14,9 @@ copper list), then runs a 320x256 5-bitplane lowres display driven by two copper
   each frame.
 * ProTracker music via [ThePlayer 6.1a](https://www.pouet.net/prod.php?which=19922)
   (`#define MUSIC` in [main.cpp](main.cpp) turns it off).
-* WinUAE debug overlay calls (`debug_rect`, `debug_text`, ...) and resource registration
-  (`debug_register_bitmap`/`_palette`/`_copperlist`) so bitmaps, palettes and copper lists show up
-  in the extension's graphics debugger.
+* WinUAE debugger resource registration (`debug_register_bitmap`/`_palette`/`_copperlist`) so
+  bitmaps, palettes and copper lists show up in the extension's graphics debugger. The overlay
+  helpers (`debug_rect`, `debug_text`, ...) are available but not currently drawn.
 
 Left mouse button exits back to the OS.
 

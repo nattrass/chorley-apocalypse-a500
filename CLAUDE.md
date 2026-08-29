@@ -125,15 +125,16 @@ enabled in addition to `INTF_VERTB`. `#define MUSIC` at the top of `main.cpp` to
 `debug_register_bitmap`/`_palette`/`_copperlist` make resources browsable in the extension's
 graphics debugger — register any new bitmap or copper list you add. `debug_clear`/`debug_rect`/
 `debug_filled_rect`/`debug_text` draw a WinUAE overlay in PAL coordinates (0,0)-(768,576), so
-multiply screen Y by 2. `debug_start_idle()`/`debug_stop_idle()` (used inside `WaitVbl`) tell the
-profiler that time is spin-waiting, not work. All of these are inert on real hardware.
+multiply screen Y by 2 — available, though nothing in the demo currently draws an overlay.
+`debug_start_idle()`/`debug_stop_idle()` (used inside `WaitVbl`) tell the profiler that time is
+spin-waiting, not work. All of these are inert on real hardware.
 
 ## Gotchas
 
-- `.vscode/settings.json` `m68k.includePaths` points at
-  `c:\Users\paul_\...amiga-debug-1.7.2\...`, which does not exist on this machine (the installed
-  extension is `1.8.2` under `PaulNattrass`). This affects VSCode IntelliSense only, not the build —
-  fix the path if IntelliSense reports bogus errors.
+- `.vscode/settings.json` `m68k.includePaths` is an absolute path pinned to the installed extension
+  version (currently `bartmanabyss.amiga-debug-1.8.2`). It affects VSCode IntelliSense only, not the
+  build, but it goes stale whenever the extension updates — repoint it if IntelliSense starts
+  reporting bogus errors.
 - The `#ifdef __INTELLISENSE__` guards in `support/gcc8_c_support.h` exist because IntelliSense
   doesn't understand 68000 register constraints. Don't "clean them up".
 - `support/` is template code from the extension; prefer changing `main.cpp` over editing it, since
