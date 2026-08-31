@@ -1,4 +1,4 @@
-// Chorley Apocalypse - Milestone 1: 4-way Scrolling Tilemap Engine (50Hz)
+// Chorley Apocalypse - Milestone 2: the player over the scrolling tilemap (50Hz)
 #define MUSIC
 
 #include "support/gcc8_c_support.h"
@@ -10,6 +10,8 @@
 #include "map.h"
 #include "display.h"
 #include "keyboard.h"
+#include "bob.h"
+#include "player.h"
 
 #include <proto/exec.h>
 #include <proto/dos.h>
@@ -29,6 +31,8 @@ struct GfxBase *GfxBase;
 
 // Frame counter for profiling
 volatile short frameCounter = 0;
+
+#define KEY_T 0x14
 
 __attribute__((always_inline)) inline short MouseLeft() {
 	return !((*(volatile UBYTE*)0xbfe001) & 64);
@@ -56,9 +60,13 @@ int main() {
 	DOSBase = (struct DosLibrary*)OpenLibrary((CONST_STRPTR)"dos.library", 0);
 	if (!DOSBase) Exit(0);
 
-	// Start coordinates in the Flat Iron Market area
-	int camX = 128;
-	int camY = 128;
+	// Start in the Flat Iron market square
+	const int startX = 320;
+	const int startY = 320;
+	int camX = startX + BOB_W / 2 - SCREEN_W / 2;
+	int camY = startY + BOB_H / 2 - VIEW_H / 2;
+	if (camX < 0) camX = 0;
+	if (camY < 0) camY = 0;
 	int lastTileX = camX / TILE_SIZE;
 	int lastTileY = camY / TILE_SIZE;
 
@@ -66,22 +74,27 @@ int main() {
 	UBYTE* playfieldBuffer = NULL;
 	UBYTE* tileSheet = NULL;
 	UBYTE* hudBuffer = NULL;
+	UBYTE* playerSheet = NULL;
+	UBYTE* bulletSheet = NULL;
 	USHORT* copperLists[2] = { NULL, NULL };
 	UBYTE* mapData = NULL;
 
 	warpmode(1);
 
-	// 1. Allocate Chip RAM buffers
+	// 1. Allocate Chip RAM buffers. Everything the blitter or copper touches lives here.
 	playfieldBuffer = (UBYTE*)AllocMem(PLAYFIELD_BYTES, MEMF_CHIP | MEMF_CLEAR);
 	tileSheet       = (UBYTE*)AllocMem(TILESHEET_BYTES, MEMF_CHIP | MEMF_CLEAR);
 	hudBuffer       = (UBYTE*)AllocMem(HUD_BYTES, MEMF_CHIP | MEMF_CLEAR);
+	playerSheet     = (UBYTE*)AllocMem(CLASS_BOB_BYTES, MEMF_CHIP | MEMF_CLEAR);
+	bulletSheet     = (UBYTE*)AllocMem(BULLET_SHEET_BYTES, MEMF_CHIP | MEMF_CLEAR);
 	copperLists[0]  = (USHORT*)AllocMem(1024, MEMF_CHIP | MEMF_CLEAR);
 	copperLists[1]  = (USHORT*)AllocMem(1024, MEMF_CHIP | MEMF_CLEAR);
 
 	// 2. Allocate Slow/Fast RAM for 128x128 map
 	mapData = (UBYTE*)AllocMem(MAP_BYTES, MEMF_PUBLIC | MEMF_CLEAR);
 
-	if (!playfieldBuffer || !tileSheet || !hudBuffer || !copperLists[0] || !copperLists[1] || !mapData) {
+	if (!playfieldBuffer || !tileSheet || !hudBuffer || !playerSheet || !bulletSheet ||
+	    !copperLists[0] || !copperLists[1] || !mapData) {
 		KPrintF("Memory allocation failed!\n");
 		warpmode(0);
 		Exit(0);
@@ -90,7 +103,10 @@ int main() {
 	// 3. Procedural asset and map generation during warpmode (CPU only)
 	generateTileSheet(tileSheet);
 	generateMap(mapData);
+	generatePlayerBobs(playerSheet);
+	generateBulletBobs(bulletSheet);
 	initHUD(hudBuffer);
+	entitiesInit(startX, startY);
 
 #ifdef MUSIC
 	if (p61Init(module) != 0) {
@@ -109,11 +125,26 @@ int main() {
 	custom->dmacon = DMAF_SETCLR | DMAF_MASTER | DMAF_BLITTER;
 
 	// 5. Blitter initialization (fill initial double-wide playfield view)
+	RenderCtx ctx;
+	ctx.playfield = playfieldBuffer;
+	ctx.tileSheet = tileSheet;
+	ctx.map       = mapData;
+	ctx.camX      = camX;
+	ctx.camY      = camY;
+
 	initPlayfield(playfieldBuffer, tileSheet, mapData, camX, camY);
 
 	// Build initial copper lists
 	buildCopperList(copperLists[0], camX, camY, playfieldBuffer, hudBuffer);
 	buildCopperList(copperLists[1], camX, camY, playfieldBuffer, hudBuffer);
+
+	debug_register_bitmap(playfieldBuffer, "playfield.bpl", PLAYFIELD_W, PLAYFIELD_H, BITPLANES, debug_resource_bitmap_interleaved);
+	debug_register_palette(gamePalette, "playfield.pal", 32, 0);
+	debug_register_copperlist(copperLists[0], "copper1", 1024, 0);
+	// Width is the stored width, guard word included, or the debugger skews every row.
+	debug_register_bitmap(playerSheet, "player.bpl", BOB_WORDS * 16,
+	                      BOB_H * BOB_DIRECTIONS * BOB_ANIM_FRAMES, BITPLANES,
+	                      debug_resource_bitmap_interleaved | debug_resource_bitmap_masked);
 
 	// Initialize Copper and Raster DMA
 	int copperIdx = 0;
@@ -131,74 +162,74 @@ int main() {
 
 	custom->intreq = 1 << INTB_VERTB;
 
-	const int maxCamX = MAP_W * TILE_SIZE - SCREEN_W; // 2048 - 320 = 1728
-	const int maxCamY = MAP_H * TILE_SIZE - VIEW_H;   // 2048 - 208 = 1840
-
-	int idleCounter = 0;
-	int autoAngle = 0;
+	bool stressKeyPrev = false;
+	int  liveBobs = 0;
+	int  peakLine = 0;
+	int  peakBobs = 0;
 
 	// 6. Main 50Hz Game Loop
 	while (!MouseLeft() && !keyEscPressed()) {
-		// Wait for raster line 0x10 to sync frame
+		// Sync to the top of the frame, above the display window, and stay ahead of the beam.
+		// The playfield is single-buffered, so every bob blit from here on is racing the raster
+		// down the screen -- that race is what the M2 gate is judging.
 		WaitLine(0x10);
 
-		// Poll Keyboard (CIA-A Serial Port)
+		// 6a. Put the background back under last frame's bobs, before anything moves. The
+		// records carry their own buffer slots, so this is independent of where the camera is.
+		entitiesRestore(&ctx);
+
+		// 6b. Input
 		pollKeyboard();
 
-		// Read Joystick 1 (Port 2 on standard Amiga)
 		UWORD joy = custom->joy1dat;
-		bool joyRight = (joy & 0x0002) != 0;
-		bool joyLeft  = (joy & 0x0200) != 0;
-		bool joyDown  = (((joy >> 1) ^ joy) & 0x0001) != 0;
-		bool joyUp    = (((joy >> 1) ^ joy) & 0x0100) != 0;
-		bool joyFire  = !((*(volatile UBYTE*)0xbfe001) & 0x80);
+		PlayerInput in;
+		in.right = ((joy & 0x0002) != 0)                  || keyRightHeld();
+		in.left  = ((joy & 0x0200) != 0)                  || keyLeftHeld();
+		in.down  = ((((joy >> 1) ^ joy) & 0x0001) != 0)   || keyDownHeld();
+		in.up    = ((((joy >> 1) ^ joy) & 0x0100) != 0)   || keyUpHeld();
+		in.fire  = !((*(volatile UBYTE*)0xbfe001) & 0x80) || keyFireHeld();
 
-		// Combine Joystick + Keyboard (Arrows / WASD / NumPad / Space)
-		bool moveRight = joyRight || keyRightHeld();
-		bool moveLeft  = joyLeft  || keyLeftHeld();
-		bool moveDown  = joyDown  || keyDownHeld();
-		bool moveUp    = joyUp    || keyUpHeld();
-		bool speedBoost = joyFire || keyFireHeld();
+		const bool stressKey = isKeyDown(KEY_T);
+		if (stressKey && !stressKeyPrev) entitiesToggleStress();
+		stressKeyPrev = stressKey;
 
-		int speed = speedBoost ? 4 : 2; // Fast scroll when holding fire / space / shift
+		// 6c. Move the world
+		entitiesUpdate(&in, frameCounter);
+		cameraFollow(&camX, &camY);
+		ctx.camX = camX;
+		ctx.camY = camY;
 
-		if (moveRight || moveLeft || moveDown || moveUp) {
-			idleCounter = 0;
-			if (moveRight) camX += speed;
-			if (moveLeft)  camX -= speed;
-			if (moveDown)  camY += speed;
-			if (moveUp)    camY -= speed;
-		} else {
-			idleCounter++;
-			// Automated scenic tour across all 5 zones if no input
-			if (idleCounter > 50) {
-				autoAngle = (autoAngle + 1) & 511;
-				// Smooth diagonal wandering trajectory
-				if ((autoAngle >> 7) & 1) camX += 2; else camX -= 2;
-				if ((autoAngle >> 6) & 1) camY += 2; else camY -= 2;
-			}
-		}
-
-		// Clamp camera to map bounds
-		if (camX < 0) camX = 0;
-		if (camX > maxCamX) camX = maxCamX;
-		if (camY < 0) camY = 0;
-		if (camY > maxCamY) camY = maxCamY;
-
-		// Check if camera crossed tile boundaries and blit new seams
-		int curTileX = camX / TILE_SIZE;
-		int curTileY = camY / TILE_SIZE;
-
+		// 6d. Blit whatever tile columns and rows the camera just uncovered
+		const int curTileX = camX / TILE_SIZE;
+		const int curTileY = camY / TILE_SIZE;
 		if (curTileX != lastTileX || curTileY != lastTileY) {
 			updateTileSeams(lastTileX, lastTileY, curTileX, curTileY, mapData, tileSheet, playfieldBuffer);
 			lastTileX = curTileX;
 			lastTileY = curTileY;
 		}
 
-		// Build copper list for current frame in the back-buffer copper list
+		// 6e. Draw the bobs and remember what to restore next frame
+		liveBobs = entitiesDraw(&ctx, playerSheet, bulletSheet, frameCounter);
+
+		// 6f. Hand the new camera position to the copper
 		copperIdx ^= 1;
 		buildCopperList(copperLists[copperIdx], camX, camY, playfieldBuffer, hudBuffer);
 		custom->cop1lc = (ULONG)copperLists[copperIdx];
+
+		// How far down the frame all of that got, blitter included. Past 312 is a dropped frame.
+		// Sampled every frame and held at the worst of the last 16, because a peak that only
+		// happens on a tile crossing is exactly the one worth seeing. Redrawing the digits is
+		// per-pixel CPU work on the HUD bitmap, far too expensive to do at 50Hz, and it would
+		// distort the number it is reporting.
+		WaitBlt();
+		const int rasterLine = (int)((*(volatile ULONG*)0xdff004 >> 8) & 511);
+		if (rasterLine > peakLine) peakLine = rasterLine;
+		if (liveBobs > peakBobs)  peakBobs = liveBobs;
+		if ((frameCounter & 15) == 0) {
+			hudSetCounters(hudBuffer, peakBobs, peakLine);
+			peakLine = 0;
+			peakBobs = 0;
+		}
 	}
 
 	// 7. Cleanup and exit cleanly
@@ -209,6 +240,8 @@ int main() {
 	FreeMem(playfieldBuffer, PLAYFIELD_BYTES);
 	FreeMem(tileSheet, TILESHEET_BYTES);
 	FreeMem(hudBuffer, HUD_BYTES);
+	FreeMem(playerSheet, CLASS_BOB_BYTES);
+	FreeMem(bulletSheet, BULLET_SHEET_BYTES);
 	FreeMem(copperLists[0], 1024);
 	FreeMem(copperLists[1], 1024);
 	FreeMem(mapData, MAP_BYTES);

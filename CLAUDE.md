@@ -16,12 +16,14 @@ update it when one changes.
 milestone, what "done" means for each, and the profiling gates. Its "Current position" section at
 the bottom says what to work on next; keep it accurate as milestones land.
 
-**Status: pre-alpha — the game does not exist yet.** `main.cpp` still runs the bare-metal demo from
-the [amiga-debug](https://github.com/BartmanAbyss/vscode-amiga-debug) VSCode extension template that
-this repo started life as, and `image.bpl` / `bob.bpl` / `testmod.p61` are that template's
-placeholder assets rather than game art. The Architecture section below documents that demo. It is
-the working foundation for the engine, not throwaway code — the system takeover, copper list
-building, blitter idioms and interrupt handling all carry straight over.
+**Status: pre-alpha — the engine exists, the game does not.** M0-M2 are done: the system takeover
+is modularised, a 50Hz four-way scrolling tilemap runs over a procedural 128x128 map, and a player
+with eight-way movement, eight-way latched fire and a bullet pool draws and restores over it. Every
+pixel on screen is placeholder art generated at startup — numbered tiles, a stick-figure Mill-Hand,
+no Chorley yet. `image.bpl` / `bob.bpl` are leftover art from the
+[amiga-debug](https://github.com/BartmanAbyss/vscode-amiga-debug) VSCode extension template this
+repo started life as, still committed but unreferenced; `testmod.p61` is that template music and is
+still playing.
 
 There is no OS runtime once it starts: it takes the machine over from AmigaOS, drives the custom
 chips directly, and hands control back on exit.
@@ -39,7 +41,7 @@ asset and engine decision in the project.
 
 `game/gamedefs.h` encodes that budget as `static_assert`s — display and playfield geometry, tile and
 bob layouts, and per-subsystem `BUDGET_*` reserves that sum to a compile-time total. Currently
-331,360 of 524,288 bytes, with ~188KB held back for per-world tile sets and enemies. It is included
+362,720 of 524,288 bytes, with ~158KB held back for per-world tile sets and enemies. It is included
 from `main.cpp` so it always compiles. **When a subsystem needs to grow, raise its `BUDGET_*` define
 and let the assert re-check the total — do not delete the assert.**
 
@@ -78,15 +80,32 @@ configuration, since that is the shipping target and not merely a compatibility 
 - `obj/DELETE.ME` and `out/DELETE.ME` are tracked placeholders keeping those directories in git.
   `make clean` deletes them; restore with `git checkout obj out`.
 
+
 ## Architecture
 
-This section describes the template demo currently in `main.cpp`. The engine is being built on top
-of these idioms, so they are worth following rather than replacing.
+The engine as it stands after M2: a scrolling tilemap with a player, bullets and bob restore over
+it. The template demo it grew out of is gone from `main.cpp`, but its idioms — the system takeover,
+copper list building, the blitter register sequence, the interrupt install — carry straight
+through, so follow them rather than replacing them.
+
+| File | Holds |
+| --- | --- |
+| `main.cpp` | Allocation, init, the frame loop, exit |
+| `system.cpp` / `.h` | `TakeSystem`/`FreeSystem`, the VBR interrupt install, `WaitVbl`/`WaitLine`/`WaitBlt` |
+| `copper.h` | `copSetPlanes`/`copWaitY`/`copSetColor`/`screenScanDefault`, all `always_inline` |
+| `display.cpp` / `.h` | `blitTile`, the playfield window, `buildCopperList`, the HUD |
+| `tiles.cpp` / `.h` | The 32-colour palette, the procedural tile sheet, `drawTextPlanar` |
+| `map.cpp` / `.h` | The procedural 128x128 Chorley map and `getMapTile` |
+| `bob.cpp` / `.h` | `bobDraw`/`bobRestore` and the procedural player and bullet bobs |
+| `player.cpp` / `.h` | Player state, eight-way move and fire, the bullet pool, the camera |
+| `keyboard.cpp` / `.h` | Raw CIA-A keyboard polling |
+| `music.cpp` / `.h` | The P61 glue |
 
 ### Lifecycle (`main`)
 
-`OpenLibrary(graphics/dos)` → warpmode-wrapped precalc → `TakeSystem()` → build copper list →
-install VBL handler → main loop until left mouse button → `FreeSystem()` → `CloseLibrary`.
+`OpenLibrary(graphics/dos)` → allocate → warpmode-wrapped procedural generation → `TakeSystem()` →
+fill the playfield → build the copper lists → install the VBL handler → frame loop until LMB or Esc
+→ `FreeMem` → `FreeSystem()` → `CloseLibrary`.
 
 `TakeSystem()`/`FreeSystem()` are a matched pair and must stay symmetric: they save and restore
 `adkcon`, `intena`, `dmacon`, the active `View`, the system copper lists (`GfxBase->copinit` /
@@ -94,26 +113,68 @@ install VBL handler → main loop until left mouse button → `FreeSystem()` →
 or corrupts the host OS on exit. Between them, **no AmigaOS calls except `AllocMem`/`FreeMem`** —
 interrupts are disabled and the OS is forbidden.
 
-`warpmode(1)`/`warpmode(0)` bracket slow precalc so WinUAE fast-forwards it instead of the profiler
-attributing that time to the demo. Wrap any new table generation the same way.
+`warpmode(1)`/`warpmode(0)` bracket the procedural tile, map and bob generation so WinUAE
+fast-forwards it instead of the profiler attributing that time to the game. Wrap any new table
+generation the same way.
 
-### Display
+### The playfield buffer
 
-Two copper lists run per frame:
+One buffer, `PLAYFIELD_W x PLAYFIELD_H` (768x272) by 5 interleaved planes, holding a window of the
+map. Two rules define it and everything else follows:
 
-- `copper1` — built at runtime into chip mem (`AllocMem(1024, MEMF_CHIP)`). `screenScanDefault()`
-  sets up 320x256 lowres (`ddfstrt`/`ddfstop`/`diwstrt`/`diwstop`), then `bplcon0` (5 planes),
-  `bplcon1` (scroll), `bplcon2`, both bitplane modulos (`4*lineSize`, the interleaved stride), the
-  5 bitplane pointers and all 32 colors, then jumps to `copper2` via `copjmp2`.
-- `copper2` — a static `.MEMF_CHIP`-sectioned array of raw copper words: the grey gradient bars on
-  lines `0x41`–`0x4f`.
+- **Map column `c` always lives in buffer slot `c % BUF_COLS`, map row `r` in slot `r % BUF_ROWS`.**
+  So world pixel x is at buffer pixel `x % PLAYFIELD_HALF_W` and world pixel y at
+  `y % PLAYFIELD_H`, and scrolling is nothing but moving the bitplane pointers.
+- **Every tile is blitted twice, `BUF_COLS` apart.** The right half duplicates the left, so the
+  320-pixel display window never straddles the end of a buffer row and horizontal scrolling never
+  hitches. Vertical wrap is not duplicated — the copper jumps the bitplane pointers back to the top
+  of the buffer at the wrap line instead.
 
-`copSetPlanes` / `copWaitXY` / `copWaitY` / `copSetColor` are all `always_inline` and take/return a
-moving `USHORT* copListEnd` cursor — that is the idiom for appending to a copper list; keep it.
+The loaded window is anchored `BUF_ANCHOR` tiles *before* the camera tile rather than on it. That
+one tile of lead is what lets a bob straddling the left screen edge be clipped losslessly; without
+it the first source word of the blit would have to be dropped, taking the pixels it shifts into the
+second word with it, and up to 15 columns of bob would disappear at the edge.
 
-`scroll` is a raw pointer into `copper1` at the `bplcon1` data word. The VBL handler rewrites it each
-frame from `sinus15[]`, hardware-scrolling the playfield without touching the bitmap. Poking a copper
-list word from the interrupt is the pattern used throughout.
+`playfieldReadX()` in `display.h` is the buffer x the copper starts reading at, and `bobDraw` takes
+its anchor from the same function. **They must agree** — the two halves hold identical background,
+but a bob drawn into the half the display is not reading is simply invisible.
+
+`initPlayfield` fills the window, `updateTileSeams` blits the columns and rows a camera move
+uncovered, and `buildCopperList` turns a camera position into bitplane pointers plus the `bplcon1`
+sub-word scroll. The copper lists are double buffered: the one built this frame is latched by
+`cop1lc` and takes effect at the next vertical blank.
+
+### Bobs
+
+`BOB_FRAME_BYTES` of interleaved planes with an interleaved mask: per pixel line, per plane,
+`BOB_WORDS` data words followed by `BOB_WORDS` mask words. The frame is stored one word wider than
+the bob draws, because the blitter shift that reaches a sub-word X has to put the pixels it shifts
+out of the last word somewhere.
+
+`bobDraw` is a single cookie-cut blit — `bltcon0 = (shift << 12) | 0x0fca` with A = mask, B =
+source, C and D = the playfield — clipped to the loaded window in whole words horizontally and
+exact rows vertically, and split into two blits when it crosses the buffer's vertical wrap.
+
+`bobRestore` puts the background back by **re-blitting the map tiles the bob covered**, not by
+restoring saved pixels. Because the buffer is indexed by world position, the tiles are the backup:
+it costs no scratch chip RAM, it survives the seam blitter having rewritten the area, and
+overlapping bobs need no ordering. `bobDraw` records the tile rect and the buffer half it used in a
+`BobRect` so the restore is independent of where the camera has moved to since.
+
+### Frame order
+
+The order in the loop is load-bearing and the reason bobs survive a scrolling background:
+
+1. `WaitLine(0x10)` — sync above the display window
+2. `entitiesRestore` — the playfield is pure background again
+3. read input, `entitiesUpdate`, `cameraFollow`
+4. `updateTileSeams` for whatever the camera uncovered
+5. `entitiesDraw` — draw and record
+6. `buildCopperList` and hand it to `cop1lc`
+
+Restore must come before the seams, or a restore would put stale tiles back over a fresh seam. The
+playfield is single-buffered, so from step 2 onward the blitter is racing the raster down the
+screen; the HUD shows the raster line reached at the end of the frame, which is the number to watch.
 
 ### Memory / assets
 
@@ -122,27 +183,21 @@ list word from the interrupt is the pattern used throughout.
 Anything a custom chip touches (bitplanes, copper lists, sample data, the P61 module) **must** be
 chip mem; the P61 player binary itself is CPU-only and is plain `INCBIN`.
 
-Asset layouts (all interleaved, produced by `gfx/convert.cmd` via the bundled `KingCon.exe`):
+Everything the game currently draws is generated procedurally at startup into `AllocMem(...,
+MEMF_CHIP)` buffers, so the only remaining `INCBIN` asset is `testmod.p61`. `image.bpl`,
+`image.pal` and `bob.bpl` are leftover template art, still committed but no longer referenced;
+`gfx/convert.cmd` and the bundled `KingCon.exe` are how real art will be converted, interleaved,
+when it arrives.
 
-| File | Layout |
-| --- | --- |
-| `image.bpl` | 320x256, 5 planes interleaved — 40 bytes per plane-row, 200 bytes per screen line, 51200 total |
-| `image.pal` | 32 raw `UWORD` OCS colors |
-| `bob.bpl` | 6 frames of 32x16, 5 planes, each plane row followed by a copy of the mask row → 8 bytes per blit row, 640 bytes per frame |
+### Rendering
 
-Binary assets are committed; only re-run `gfx/convert.cmd` (from inside `gfx/`) after editing the PNGs.
+Single-buffered: bobs are drawn straight into the displayed playfield. Tiles go in with an
+`A_TO_D` blit (`bltcon0 = 0x09f0`), bobs with the cookie-cut minterm `0xca` described above. Every
+blitter register write must be preceded by `WaitBlt()` — the local OS-free one in `system.h`, never
+graphics.library's.
 
-### Rendering loop
-
-Single-buffered, drawing straight into the displayed `image` bitmap. Lines 200–255 are the bob band:
-each frame the loop waits for line `0x10`, clears the band with an `A_TO_D` blit (`(56*5)` rows),
-then cookie-cuts 16 bobs into it with minterm `0xca` (A=source, B=mask, C=background, D=dest) plus
-`bltcon0`/`bltcon1` shifts for sub-word X. Positions come from the `sinus32`/`sinus40` byte tables
-indexed by `frameCounter`.
-
-Every blitter register write must be preceded by `WaitBlit()`. Note that `custom->dmacon =
-DMAF_BLITTER` deliberately clears blitter DMA before `copjmp1` to dodge the copper-jump hardware
-bug, then re-enables it.
+The HUD occupies lines 252-255 and below via a copper split down to `HUD_BITPLANES` planes, drawn
+into its own buffer by `initHUD` and updated each frame by `hudSetCounters`.
 
 ### Interrupt
 

@@ -35,13 +35,31 @@
 // Vertical wrap is handled by a copper split that rewrites the bitplane pointers back to the
 // top of the buffer at the wrap line, so the buffer only needs screen height + margin.
 
-#define PLAYFIELD_HALF_W 352                    // 22 tiles: screen + 2 tiles of margin
-#define PLAYFIELD_W      (PLAYFIELD_HALF_W * 2) // 704
+#define PLAYFIELD_HALF_W 384                    // 24 tiles: screen + 3 tiles of margin
+#define PLAYFIELD_W      (PLAYFIELD_HALF_W * 2) // 768
 #define PLAYFIELD_H      272                    // 17 tiles: view + margin
 
-#define PLAYFIELD_ROW_BYTES  (PLAYFIELD_W / 8)                        // 88 per plane-row
-#define PLAYFIELD_LINE_BYTES (PLAYFIELD_ROW_BYTES * BITPLANES)        // 440, interleaved
-#define PLAYFIELD_BYTES      (PLAYFIELD_LINE_BYTES * PLAYFIELD_H)     // 119,680
+// Tile grid of one buffer half, and the buffer's world window.
+//
+// The buffer slot for map column c is always c % BUF_COLS, and for map row r always r % BUF_ROWS
+// -- that mapping is what puts world pixel x at buffer pixel x % PLAYFIELD_HALF_W. What the
+// margin buys is *which* columns are loaded: the window is anchored BUF_ANCHOR tiles before the
+// camera tile, so a bob straddling the left or top screen edge still has buffer to be clipped
+// against instead of wrapping round to the opposite edge.
+//
+//   columns loaded: [camTileX - BUF_ANCHOR, camTileX - BUF_ANCHOR + BUF_COLS - 1]
+//   rows    loaded: [camTileY - BUF_ANCHOR, camTileY - BUF_ANCHOR + BUF_ROWS - 1]
+
+#define BUF_COLS        (PLAYFIELD_HALF_W / TILE_SIZE)   // 24
+#define BUF_ROWS        (PLAYFIELD_H / TILE_SIZE)        // 17
+#define BUF_ANCHOR      1                                // tiles of margin before the camera tile
+
+#define VIEW_COLS       (SCREEN_W / TILE_SIZE + 1)       // 21 columns can be on screen at once
+#define VIEW_ROWS       (VIEW_H / TILE_SIZE + 1)         // 14 rows can be on screen at once
+
+#define PLAYFIELD_ROW_BYTES  (PLAYFIELD_W / 8)                        // 96 per plane-row
+#define PLAYFIELD_LINE_BYTES (PLAYFIELD_ROW_BYTES * BITPLANES)        // 480, interleaved
+#define PLAYFIELD_BYTES      (PLAYFIELD_LINE_BYTES * PLAYFIELD_H)     // 130,560
 
 #define PLAYFIELD_MODULO (PLAYFIELD_ROW_BYTES * (BITPLANES - 1) + (PLAYFIELD_ROW_BYTES - SCREEN_W / 8))
 
@@ -60,16 +78,33 @@
 
 // --- Bobs ----------------------------------------------------------------------------------
 // Interleaved with an interleaved mask, same layout as bob.bpl: each plane row is followed by
-// a copy of the mask row, so a 32px wide bob is 8 bytes per blit row.
+// a copy of the mask row.
+//
+// A bob is stored one word wider than it draws. The blitter shifts A and B right to reach a
+// sub-word X, and the pixels shifted out of the last word have to land somewhere -- that guard
+// word is where. Without it a bob could only be drawn on 16-pixel boundaries.
 
 #define BOB_W           32
 #define BOB_H           32
-#define BOB_FRAME_BYTES (BOB_H * BITPLANES * (BOB_W / 8 * 2))        // 1280
+#define BOB_WORDS       (BOB_W / 16 + 1)                             // 3: 2 of bob, 1 of guard
+#define BOB_ROW_BYTES   (BOB_WORDS * 2 * 2)                          // 12: data words then mask
+#define BOB_FRAME_BYTES (BOB_H * BITPLANES * BOB_ROW_BYTES)          // 1,920
 
 #define BOB_DIRECTIONS  8
 #define BOB_ANIM_FRAMES 2
-#define CLASS_BOB_BYTES (BOB_FRAME_BYTES * BOB_DIRECTIONS * BOB_ANIM_FRAMES)   // 20,480
+#define CLASS_BOB_BYTES (BOB_FRAME_BYTES * BOB_DIRECTIONS * BOB_ANIM_FRAMES)   // 30,720
 #define PLAYERS_LOADED  2                       // only the two picked classes live in chip
+
+// Bullets are 16x16 in the same layout, one frame per direction, no animation.
+
+#define BULLET_W           16
+#define BULLET_H           16
+#define BULLET_WORDS       (BULLET_W / 16 + 1)                       // 2: 1 of bob, 1 of guard
+#define BULLET_ROW_BYTES   (BULLET_WORDS * 2 * 2)                    // 8
+#define BULLET_FRAME_BYTES (BULLET_H * BITPLANES * BULLET_ROW_BYTES) // 640
+#define BULLET_SHEET_BYTES (BULLET_FRAME_BYTES * BOB_DIRECTIONS)     // 5,120
+
+#define MAX_BULLETS        24                   // the pool, and the M2 gate bob count
 
 #define HUD_BYTES       (SCREEN_W / 8 * HUD_H * HUD_BITPLANES)       // 5,760
 
@@ -101,8 +136,17 @@ static_assert(PLAYFIELD_H % TILE_SIZE == 0, "playfield height must be a whole ti
 static_assert(PLAYFIELD_HALF_W >= SCREEN_W + TILE_SIZE, "playfield needs >=1 tile of horizontal margin");
 static_assert(PLAYFIELD_H >= VIEW_H + TILE_SIZE, "playfield needs >=1 tile of vertical margin");
 
-static_assert(PLAYFIELD_BYTES == 119680, "playfield size drifted from the DESIGN.md budget");
-static_assert(CLASS_BOB_BYTES == 20480, "class bob size drifted from the DESIGN.md budget");
+// Bob clipping needs margin on both sides of the view, not only after it. Before the view it
+// comes from BUF_ANCHOR; after it, from whatever the view leaves over. A bob blit is BOB_WORDS
+// wide, so the trailing margin has to cover a whole blit and not merely the bob.
+static_assert(BUF_ANCHOR >= 1, "a bob at the left or top screen edge has no buffer to clip against");
+static_assert(BUF_COLS - BUF_ANCHOR - VIEW_COLS >= BOB_WORDS - 1,
+	"not enough columns after the view for a bob blit at the right screen edge");
+static_assert(BUF_ROWS - BUF_ANCHOR - VIEW_ROWS >= BOB_H / TILE_SIZE,
+	"not enough rows after the view for a bob at the bottom screen edge");
+
+static_assert(PLAYFIELD_BYTES == 130560, "playfield size drifted from the DESIGN.md budget");
+static_assert(CLASS_BOB_BYTES == 30720, "class bob size drifted from the DESIGN.md budget");
 
 // The whole point: if a subsystem grows past the target, fail here and not on an A500.
 static_assert(CHIP_BUDGET_TOTAL < CHIP_AVAILABLE, "chip RAM budget exceeded for a 512KB chip A500");

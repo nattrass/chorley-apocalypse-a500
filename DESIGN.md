@@ -55,28 +55,36 @@ to live in the 512KB chip half. Code, tile maps, enemy tables and precalc go in 
 
 | Item | Bytes | Notes |
 | --- | ---: | --- |
-| Playfield, double-wide | 119,680 | 704x272x5 interleaved, 88 bytes/plane-row. Each incoming tile column is blitted twice so the display window never wraps mid-line. Two tiles of margin each way |
+| Playfield, double-wide | 130,560 | 768x272x5 interleaved, 96 bytes/plane-row. Each incoming tile column is blitted twice so the display window never wraps mid-line. Three tiles of horizontal margin, one of them ahead of the camera so bobs at the left edge have somewhere to be clipped against |
 | Tile sheet, 256 tiles | 40,960 | 16x16x5 interleaved, 160 bytes/tile |
-| Player bobs, 2 classes loaded | 40,960 | 32x32, 8 directions x 2 frames, 1280 bytes/frame with mask |
+| Player bobs, 2 classes loaded | 61,440 | 32x32, 8 directions x 2 frames, 1,920 bytes/frame with mask and the shift guard word |
 | Enemy bobs | ~40,000 | Per-world set, loaded on level entry |
 | Bullets, explosions, pickups | ~10,000 | 16x16 |
 | HUD panel | 5,760 | 320x48x3 via copper split — fewer bitplanes below the play area |
 | Music module | ~60,000 | P61, one per world |
 | Copper lists | ~4,000 | Double buffered, plus the panel split |
 | Blitter scratch / restore | ~10,000 | |
-| **Total** | **331,360** | ~188KB headroom for level-specific assets |
+| **Total** | **362,720** | ~158KB headroom for level-specific assets |
 
 The headroom is the point. Each Chaos Engine world has its own tile set and enemy set; a
-per-world load into that ~188KB is what makes four visually distinct worlds affordable.
+per-world load into that ~158KB is what makes four visually distinct worlds affordable.
 `game/gamedefs.h` holds these numbers as `static_assert`s, so the build fails rather than the
 hardware if a subsystem outgrows its line.
 
-**Open question, to settle at the M1 gate:** the figure above buys a *double-wide* playfield, not
-a double-buffered one — the two cost exactly the same 119,680 bytes, and only one is affordable.
-Double-wide gives hitch-free horizontal scrolling but leaves the playfield single-buffered, so bob
-drawing has to chase the beam. If M2 shows that tearing is unacceptable, the alternatives are a
-narrow double-buffered playfield with a scroll hitch at each wrap, or dropping to 4 bitplanes to
-afford both. Do not commit to art volume until this is settled.
+**Open question, to settle at the M2 gate:** the figure above buys a *double-wide* playfield, not
+a double-buffered one — the two cost the same and only one is affordable. Double-wide gives
+hitch-free horizontal scrolling but leaves the playfield single-buffered, so bob drawing has to
+chase the beam. If M2 shows that tearing is unacceptable, the alternatives are a narrow
+double-buffered playfield with a scroll hitch at each wrap, or dropping to 4 bitplanes to afford
+both. Do not commit to art volume until this is settled.
+
+Two consequences of single buffering are settled, though. Restoring behind a bob is done by
+re-blitting the map tiles it covered rather than by saving the pixels underneath: the buffer is
+indexed by world position, so the tiles *are* the backup, which costs no scratch RAM, survives
+the playfield scrolling between the draw and the restore, and does not care in what order
+overlapping bobs are drawn. And bobs are stored one word wider than they draw, because the
+blitter shift that reaches a sub-word X has to put the pixels it shifts out somewhere -- that is
+the 1,920 rather than 1,280 bytes per frame in the table above.
 
 ### Slow RAM (512KB)
 

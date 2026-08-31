@@ -52,7 +52,7 @@ The single most important milestone in the project.
 **Done when:** you can scroll the whole 2048x2048 map smoothly, no tearing, no glitch at any wrap
 boundary, holding 50Hz.
 
-**Current status:** M1 is complete. The procedural 32-tile sheet with high-contrast numbers and 32-color palette has been implemented, along with the procedural 128x128 Chorley map (2048x2048 px), double-wide 704x272 playfield buffer, double-buffered copper lists with seamless vertical wrap and 48-line HUD split, blitter edge seam updates, and 50Hz joystick/manual/auto scrolling with background P61 music playback.
+**Current status:** M1 is complete. The procedural 32-tile sheet with high-contrast numbers and 32-color palette has been implemented, along with the procedural 128x128 Chorley map (2048x2048 px), double-wide 768x272 playfield buffer (widened from 704 in M2), double-buffered copper lists with seamless vertical wrap and 48-line HUD split, blitter edge seam updates, and 50Hz joystick/manual/auto scrolling with background P61 music playback.
 
 > **GATE — profile before going further.** Measure with the extension's profiler. You need
 > **≥40% of the frame still free** with nothing but scrolling on screen; bobs will eat the rest.
@@ -69,6 +69,21 @@ boundary, holding 50Hz.
 - Bullets as 16x16 bobs from a fixed pool.
 
 **Done when:** you can run around the map and shoot in eight directions at 50Hz.
+
+**Current status:** M2 is built and awaiting the gate. `bob.cpp` draws cookie-cut bobs clipped to
+the playfield window and split across its vertical wrap, and restores behind them by re-blitting
+the map tiles they covered rather than saving pixels -- the buffer is indexed by world position, so
+the tiles are the backup, which costs no scratch chip RAM and survives the playfield scrolling
+between the draw and the restore. `player.cpp` has eight-way movement at the Mill-Hand speed,
+fire direction latched on the button press, a 24-bullet pool and a dead-zone camera. Two engine
+fixes came with it: `initPlayfield` was filling buffer slots with map columns offset by the start
+camera tile, which disagreed with both `updateTileSeams` and the copper; and the playfield grew
+from 22 to 24 tile columns with the window anchored one tile ahead of the camera, without which a
+bob at the left screen edge loses up to 15 columns to the blitter shift.
+
+Press **T** for a screen-filling grid of 24 32x32 bobs, which is what the gate below wants to
+measure. The HUD shows the live bob count and the raster line reached at the end of frame work,
+held at the worst of the last 16 frames: past 312 is a dropped frame.
 
 > **GATE — profile again with ~24 bobs live.** This is the real budget test. If it fails here, the
 > lever is bob count and bob size, and DESIGN.md's enemy counts come down to match.
@@ -202,5 +217,14 @@ A1200 is not a scope lever, it is a different project.
 - Update [DESIGN.md](DESIGN.md) when a design decision changes. A stale bible is worse than none.
 
 ## Current position
- 
-M1 is complete: the 50Hz 4-way scrolling tilemap engine, 128x128 map, double-wide playfield, vertical copper wrap, and HUD split are verified and running. **Next action: proceed with M2 (Player character, 8-way movement, 8-way independent fire, and bob restore-behind over scrolling background).**
+
+M2 is built: the player, bullets and bob restore-behind all run over the scrolling playfield, and
+the geometry has been verified exhaustively off-target -- the whole clip, wrap and restore path was
+swept against an emulated blitter for both bob sizes across every sub-tile camera phase and both
+buffer halves, checking that the screen shows each bob exactly where the camera says it should be
+and that restoring puts the background back.
+
+**Next action: the M2 gate.** Run the A500 config, press T for the 24-bob grid, and watch two
+things: the raster line in the HUD, and whether tearing on the single-buffered playfield is
+acceptable. Both answers feed decisions that are still open in DESIGN.md section 3 -- the bob
+budget, and double-wide versus double-buffered. Only after that does M3 start.
