@@ -1,4 +1,5 @@
 #include "player.h"
+#include "display.h"
 #include "map.h"
 
 // --- state ----------------------------------------------------------------------------------
@@ -83,6 +84,8 @@ void entitiesInit(int startWorldX, int startWorldY) {
 }
 
 void entitiesRestore(const RenderCtx* ctx) {
+	// One register setup for the whole run of tile blits -- see tileBlitBegin().
+	tileBlitBegin();
 	for (int i = 0; i < drawnCount; i++) bobRestore(ctx, &drawn[i]);
 	drawnCount = 0;
 }
@@ -172,7 +175,8 @@ __attribute__((always_inline)) static inline bool onScreen(const RenderCtx* ctx,
 	       wy + h > ctx->camY && wy < ctx->camY + VIEW_H;
 }
 
-int entitiesDraw(const RenderCtx* ctx, const UBYTE* playerSheet, const UBYTE* bulletSheet, short frame) {
+int entitiesDraw(const RenderCtx* ctx, const UBYTE* playerSheet, const UBYTE* bulletSheet,
+                 const UBYTE* bulletPlaced, short frame) {
 	int count = 0;
 
 	// Stress grid first, so it sits under everything that matters.
@@ -197,8 +201,13 @@ int entitiesDraw(const RenderCtx* ctx, const UBYTE* playerSheet, const UBYTE* bu
 		}
 	}
 
+	// Bullets are collected in the same order by entitiesBullets, so the nth active bullet here
+	// is the nth entry the sprite builder reported on.
+	int slot = 0;
 	for (int i = 0; i < MAX_BULLETS; i++) {
 		if (!bullets[i].active) continue;
+		const int placed = bulletPlaced[slot++];
+		if (placed) continue;              // a sprite channel is carrying it
 		const int wx = bullets[i].x >> FP_SHIFT;
 		const int wy = bullets[i].y >> FP_SHIFT;
 		if (!onScreen(ctx, wx, wy, BULLET_W, BULLET_H)) continue;
@@ -221,6 +230,18 @@ int entitiesDraw(const RenderCtx* ctx, const UBYTE* playerSheet, const UBYTE* bu
 	}
 
 	return count;
+}
+
+int entitiesBullets(SpriteEnt* out) {
+	int n = 0;
+	for (int i = 0; i < MAX_BULLETS; i++) {
+		if (!bullets[i].active) continue;
+		out[n].x   = (short)(bullets[i].x >> FP_SHIFT);
+		out[n].y   = (short)(bullets[i].y >> FP_SHIFT);
+		out[n].dir = bullets[i].dir;
+		n++;
+	}
+	return n;
 }
 
 void entitiesToggleStress() { stressOn = !stressOn; }

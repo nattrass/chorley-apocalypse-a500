@@ -5,6 +5,7 @@
 #include "support/gcc8_c_support.h"
 #include "game/gamedefs.h"
 #include "bob.h"
+#include "sprites.h"
 #include <exec/types.h>
 
 // The player, the bullet pool and the camera. Positions are world pixels in 1/16ths, which is
@@ -46,9 +47,15 @@ void entitiesUpdate(const PlayerInput* in, short frame);
 // Step 2b: follow the player, dead zone first, then clamped to the map.
 void cameraFollow(int* camX, int* camY);
 
-// Step 4: draw everything, recording what to restore next frame. Returns the number of bobs
-// actually blitted, which is the number the profiler should be told about.
-int entitiesDraw(const RenderCtx* ctx, const UBYTE* playerSheet, const UBYTE* bulletSheet, short frame);
+// Step 3b: collect the live bullets for the sprite multiplexer. Returns how many were written.
+int entitiesBullets(SpriteEnt* out);
+
+// Step 4: draw everything, recording what to restore next frame. bulletPlaced[i] comes back from
+// spritesBuild and marks the bullets a sprite channel already carries, which cost the blitter
+// nothing and must not also be blitted. Returns the number of bobs actually blitted, which is
+// the number the profiler should be told about.
+int entitiesDraw(const RenderCtx* ctx, const UBYTE* playerSheet, const UBYTE* bulletSheet,
+                 const UBYTE* bulletPlaced, short frame);
 
 void entitiesToggleStress();
 bool entitiesStressOn();

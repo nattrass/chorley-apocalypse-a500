@@ -6,7 +6,11 @@
 #include "game/gamedefs.h"
 #include <exec/types.h>
 
-// Blit a 16x16 tile (5 planes interleaved) into the double-wide playfield buffer
+// Set the blitter registers every tile blit shares. Must precede any run of blitTile calls.
+void tileBlitBegin(void);
+
+// Blit a 16x16 tile (5 planes interleaved) into the double-wide playfield buffer. Assumes
+// tileBlitBegin() has run since the last time anything else touched the blitter.
 void blitTile(const UBYTE* tileSheet, UBYTE* playfield, int tileIdx, int bufTileX, int bufTileY);
 
 // Fill the initial 22x17 view from map (duplicated at +22 cols)
@@ -25,13 +29,15 @@ void updateTileSeams(int oldTileX, int oldTileY, int newTileX, int newTileY,
 // bobDraw uses the same anchor, and the two must agree or bobs land in the half nobody is
 // looking at.
 __attribute__((always_inline)) inline int playfieldReadX(int camX) {
-	int x = camX % PLAYFIELD_HALF_W;
+	int x = wrapMod(camX, PLAYFIELD_HALF_W);
 	if (x < TILE_SIZE) x += PLAYFIELD_HALF_W;
 	return x;
 }
 
-// Build copper list for current camera position and HUD split
-USHORT* buildCopperList(USHORT* copList, int camX, int camY, const UBYTE* playfield, const UBYTE* hud);
+// Build copper list for current camera position and HUD split. sprChains[] is the sprite chain
+// to point each of the eight SPRxPT registers at, from spritesBuild().
+USHORT* buildCopperList(USHORT* copList, int camX, int camY, const UBYTE* playfield, const UBYTE* hud,
+                        const UWORD* const* sprChains);
 
 // Render the 320x48 3-bitplane HUD panel
 void initHUD(UBYTE* hudBuffer);

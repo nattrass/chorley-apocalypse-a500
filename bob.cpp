@@ -10,10 +10,6 @@ extern volatile struct Custom *custom;
 const short dirX[BOB_DIRECTIONS] = {   0,  11,  16,  11,   0, -11, -16, -11 };
 const short dirY[BOB_DIRECTIONS] = { -16, -11,   0,  11,  16,  11,   0, -11 };
 
-__attribute__((always_inline)) static inline int posMod(int v, int m) {
-	int r = v % m;
-	return (r < 0) ? r + m : r;
-}
 
 // --- drawing ------------------------------------------------------------------------------
 
@@ -65,7 +61,7 @@ bool bobDraw(const RenderCtx* ctx, const UBYTE* frame, int srcWords, int h, int 
 
 	// Vertical wrap: the copper jumps the bitplane pointers back to the top of the buffer, so a
 	// bob crossing that line is two blits, the second starting at buffer row 0.
-	int by    = posMod(y0, PLAYFIELD_H);
+	int by    = wrapMod(y0, PLAYFIELD_H);
 	int rows1 = rows;
 	if (by + rows1 > PLAYFIELD_H) rows1 = PLAYFIELD_H - by;
 
@@ -114,7 +110,7 @@ bool bobDraw(const RenderCtx* ctx, const UBYTE* frame, int srcWords, int h, int 
 void bobRestore(const RenderCtx* ctx, const BobRect* rec) {
 	for (int i = 0; i < rec->nr; i++) {
 		const int r  = rec->mapR0 + i;
-		const int br = posMod(r, BUF_ROWS);
+		const int br = wrapMod(r, BUF_ROWS);
 		for (int j = 0; j < rec->nc; j++) {
 			const int c = rec->mapC0 + j;
 			blitTile(ctx->tileSheet, ctx->playfield, getMapTile(ctx->map, c, r), rec->bufC0 + j, br);

@@ -59,24 +59,25 @@ to live in the 512KB chip half. Code, tile maps, enemy tables and precalc go in 
 | Tile sheet, 256 tiles | 40,960 | 16x16x5 interleaved, 160 bytes/tile |
 | Player bobs, 2 classes loaded | 61,440 | 32x32, 8 directions x 2 frames, 1,920 bytes/frame with mask and the shift guard word |
 | Enemy bobs | ~40,000 | Per-world set, loaded on level entry |
-| Bullets, explosions, pickups | ~10,000 | 16x16 |
+| Explosions, pickups | ~10,000 | 16x16. Bullets moved to hardware sprites at the M2 gate |
 | HUD panel | 5,760 | 320x48x3 via copper split — fewer bitplanes below the play area |
 | Music module | ~60,000 | P61, one per world |
 | Copper lists | ~4,000 | Double buffered, plus the panel split |
 | Blitter scratch / restore | ~10,000 | |
-| **Total** | **362,720** | ~158KB headroom for level-specific assets |
+| Sprite chains + bullet sprite sheet | ~7,200 | Rebuilt per frame; see the sprite section below |
+| **Total** | **369,920** | ~151KB headroom for level-specific assets |
 
 The headroom is the point. Each Chaos Engine world has its own tile set and enemy set; a
 per-world load into that ~158KB is what makes four visually distinct worlds affordable.
 `game/gamedefs.h` holds these numbers as `static_assert`s, so the build fails rather than the
 hardware if a subsystem outgrows its line.
 
-**Open question, to settle at the M2 gate:** the figure above buys a *double-wide* playfield, not
-a double-buffered one — the two cost the same and only one is affordable. Double-wide gives
-hitch-free horizontal scrolling but leaves the playfield single-buffered, so bob drawing has to
-chase the beam. If M2 shows that tearing is unacceptable, the alternatives are a narrow
-double-buffered playfield with a scroll hitch at each wrap, or dropping to 4 bitplanes to afford
-both. Do not commit to art volume until this is settled.
+**Settled at the M2 gate: stay double-wide.** The figure above buys a *double-wide* playfield, not
+a double-buffered one — the two cost the same and only one is affordable. The gate measured the
+frame at 4.2x its budget with 24 bobs live, and double buffering moves no blitter work whatever:
+it would have bought a clean-looking 12Hz. The problem was never that the overrun was visible, it
+was that the work did not fit, so the decision goes to the option that costs nothing in
+throughput. Tearing gets judged again once the frame fits, at a bob count that actually runs.
 
 Two consequences of single buffering are settled, though. Restoring behind a bob is done by
 re-blitting the map tiles it covered rather than by saving the pixels underneath: the buffer is
@@ -93,11 +94,72 @@ spawn tables, class stat tables, sine/atan precalc, and save/continue state.
 
 ### Performance budget
 
-At 50Hz on a 7MHz 68000 a frame is roughly 128,000 cycles, and blitter time is the real
-currency. Per frame: restore and redraw ~24 bobs at 32x32x5 with mask, plus one tile column
-or row when scrolling. That is close to the whole budget. Enemy AI, collision and the RPG
-layer have to fit in what the CPU manages while the blitter works — which is why enemy counts
-stay in the twenties and bullets are 16x16 rather than 32x32.
+At 50Hz on a 7MHz 68000 a frame is roughly 128,000 cycles, and blitter time is the real currency.
+The M2 gate measured it rather than estimating it, and the estimate this section used to carry was
+wrong by more than 4x: "restore and redraw ~24 bobs at 32x32x5, plus a tile seam" was not close to
+the whole budget, it was 4.6 times over it.
+
+The unit is the raster line the frame's work finishes on, read off the HUD. Work starts at line 16
+and the frame ends at 312, so the budget is **296 lines**.
+
+| | at the gate | after the M2 optimisation pass |
+| --- | ---: | ---: |
+| 24 bobs, static camera | 1,315 | 961 |
+| 24 bobs, scrolling | 1,437 | 1,022 |
+| Cost per 32x32x5 bob | ~54 lines | ~37 lines |
+| Fixed cost before any bob, scrolling | ~159 lines | ~136 lines |
+| **Bobs that fit at 50Hz while scrolling** | **3** | **4–5** |
+
+Three findings drove that pass, and they apply to every subsystem still to be written:
+
+1. **`%` is a function call.** The 68000 has no 32-bit divide, so GCC lowers a modulo by a
+   non-power-of-two into `__divsi3` — a few hundred cycles. The buffer-wrap arithmetic was calling
+   it twice per tile and twice per bob, and roughly 45 of the 125 lines a column seam cost were
+   that alone. `wrapMod()` in `game/gamedefs.h` replaces it with repeated subtraction. **Never
+   write `%` in a per-frame path.**
+2. **Blitter register writes cost more than a small blit does.** A tile transfer is 160 blitter
+   cycles; writing the nine registers around it cost more than the transfer. Every tile blit in
+   the game shares its minterm, masks, modulos and size, so `tileBlitBegin()` hoists them and the
+   inner blit writes only the two pointers that vary.
+3. **Halving a bob's size does not halve its cost.** 16x16 measured 34 lines against 32x32's 54 —
+   75% less area for a 37% saving, because per-blit overhead and the restore's whole-tile
+   granularity do not scale with area. Shrinking the art is a weak lever. Drawing fewer things is
+   a strong one.
+
+After that pass the frame is genuinely blitter-throughput-bound, which is where it should be. Every
+remaining lever is a variation on "blit less": fewer bobs, or move objects off the blitter entirely.
+
+Enemy counts therefore do **not** stay in the twenties. Four or five 32x32 bobs is what a scrolling
+frame affords today, and that number is the constraint the world designs have to be built against
+until something structural changes.
+
+### Hardware sprites
+
+Sprite DMA costs the blitter nothing, so anything that can ride a sprite stops competing for the
+only resource that is scarce. **Bullets are on sprites.** What that buys and what it costs:
+
+- OCS gives 8 channels, 16 pixels wide, any height, 3 colours plus transparent — which is exactly
+  a bullet.
+- The colours come from fixed triples in the upper half of the palette, and at 5 bitplanes the
+  playfield owns those same registers. Bullets use channels 6 and 7, which share the single triple
+  **29–31**. That is the entire price, and only the hazard stripes had to move (to colour 23).
+  Going to four channels means also spending 25–27, which the Winter Hill signal tiles want.
+- One channel carries many bullets down the screen by chaining their control words, but only one
+  at a time: **two bullets whose rows overlap need two channels.** Bullets fired along a horizontal
+  run all share a row band, so a sideways stream wants more channels than exist.
+- Bullets that cannot get a channel fall back to being drawn as bobs. The worst case is therefore
+  exactly the old cost and the common case is free. Firing downward, 24 bullets cost the blitter
+  nothing: the HUD reads BOBS:01, line 154. Running and firing sideways, two go on sprites and the
+  rest on bobs: BOBS:13, line 408.
+
+That fallback is what makes the feature safe to build on. It also makes bullet rate and lifetime
+performance parameters as much as feel parameters — a 24-bullet pool emptied sideways is still over
+budget, and that is a tuning decision rather than an engine limit.
+
+**The player is not on sprites, and could be.** 32 pixels wide at 15 colours needs two attached
+pairs, so one player is four channels and two players is all eight — which is very likely why Chaos
+Engine had exactly two. It also hands the whole upper palette to the player art. Worth revisiting
+when the class art is real; not worth it against a placeholder.
 
 ## 4. The four worlds
 

@@ -87,6 +87,11 @@ held at the worst of the last 16 frames: past 312 is a dropped frame.
 
 > **GATE — profile again with ~24 bobs live.** This is the real budget test. If it fails here, the
 > lever is bob count and bob size, and DESIGN.md's enemy counts come down to match.
+>
+> **Run, and failed: 1,315 lines against a 296-line budget.** The pass that followed got it to 961
+> and raised what a scrolling frame affords from 3 bobs to 4–5. Bob size turned out to be a weak
+> lever (16x16 cost 34 lines against 32x32's 54) and bob count a strong one; bullets came off the
+> blitter onto sprites entirely. DESIGN.md section 3 carries the numbers and the three findings.
 
 ### M3 — The map becomes real
 - Attribute layer: `ATTR_SOLID`, `ATTR_WATER`, `ATTR_HAZARD`, `ATTR_TRIGGER`.
@@ -218,13 +223,39 @@ A1200 is not a scope lever, it is a different project.
 
 ## Current position
 
-M2 is built: the player, bullets and bob restore-behind all run over the scrolling playfield, and
-the geometry has been verified exhaustively off-target -- the whole clip, wrap and restore path was
-swept against an emulated blitter for both bob sizes across every sub-tile camera phase and both
-buffer halves, checking that the screen shows each bob exactly where the camera says it should be
-and that restoring puts the background back.
+**M2 is done and the gate has been run.** It failed, hard, and the failure has been worked:
 
-**Next action: the M2 gate.** Run the A500 config, press T for the 24-bob grid, and watch two
-things: the raster line in the HUD, and whether tearing on the single-buffered playfield is
-acceptable. Both answers feed decisions that are still open in DESIGN.md section 3 -- the bob
-budget, and double-wide versus double-buffered. Only after that does M3 start.
+- **At the gate:** 24 bobs live cost 1,315 raster lines against a 296-line budget — 4.2 frames of
+  work per frame, about 12Hz. Scrolling made it 1,437. The HUD was also under-reporting it: `vposr`
+  wraps at 313, so an overrunning frame read back as a *small* number and looked fast. The counter
+  now unwraps by counting the VBLs a frame crosses.
+- **After the optimisation pass:** 961 static, 1,022 scrolling. ~37 lines per 32x32 bob, down from
+  ~54, and a scrolling frame affords **4–5 bobs** where it afforded 3.
+- Three things did it, all recorded in DESIGN.md section 3: `%` on the 68000 is a `__divsi3` call
+  and was being made twice per tile and twice per bob; blitter register setup cost more than the
+  small blits it wrapped; and bullets moved off the blitter onto hardware sprite channels 6 and 7,
+  with a bob fallback for the rows the two channels cannot cover.
+- **Tearing was not judged.** Above 312 lines the artefacts are gross rather than subtle — bobs are
+  absent from the screen more often than not — so the question is not answerable until the frame
+  fits. It gets asked again at a bob count that runs.
+
+**The number that matters now: four or five 32x32 bobs, not twenty.** That is the real constraint
+on M4's enemy counts and on every world design after it, and DESIGN.md has been corrected to say
+so. It is not obviously fatal — a Chaos Engine screen is often four or five live things — but it
+is a long way from what the plan assumed, and it should be treated as a standing constraint rather
+than something the next optimisation pass will hand back.
+
+**Next action: M3 — the map becomes real.** The attribute layer and collision are pure CPU and
+slow-RAM work and add no blitter load, so they are unaffected by the above and can start now.
+
+Left on the table, deliberately, in rough order of value:
+
+1. **Stop blitting every seam tile twice.** Each tile goes into both buffer halves in the same
+   frame; the display reads one. Deferring the second copy would give back roughly half the
+   remaining 56-line seam cost. Not done because the optimisation pass more than halved that cost
+   already (it was 125 lines), and the duplication is a load-bearing invariant that M2's off-target
+   sweep verified exhaustively — ~28 lines is not worth breaking it for without a reason.
+2. **The player on sprites.** Four channels for one 32x32 player at 15 colours. Worth doing when
+   the class art is real.
+3. **Bullet rate and lifetime are now performance parameters.** A 24-bullet pool emptied sideways
+   still overruns; `FIRE_INTERVAL` and `BULLET_LIFE` are the knobs.

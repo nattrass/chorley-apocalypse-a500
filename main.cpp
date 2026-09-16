@@ -11,6 +11,7 @@
 #include "display.h"
 #include "keyboard.h"
 #include "bob.h"
+#include "sprites.h"
 #include "player.h"
 
 #include <proto/exec.h>
@@ -76,6 +77,8 @@ int main() {
 	UBYTE* hudBuffer = NULL;
 	UBYTE* playerSheet = NULL;
 	UBYTE* bulletSheet = NULL;
+	UWORD* spriteSheet = NULL;
+	UWORD* spriteChains = NULL;
 	USHORT* copperLists[2] = { NULL, NULL };
 	UBYTE* mapData = NULL;
 
@@ -87,6 +90,8 @@ int main() {
 	hudBuffer       = (UBYTE*)AllocMem(HUD_BYTES, MEMF_CHIP | MEMF_CLEAR);
 	playerSheet     = (UBYTE*)AllocMem(CLASS_BOB_BYTES, MEMF_CHIP | MEMF_CLEAR);
 	bulletSheet     = (UBYTE*)AllocMem(BULLET_SHEET_BYTES, MEMF_CHIP | MEMF_CLEAR);
+	spriteSheet     = (UWORD*)AllocMem(SPR_SHEET_BYTES, MEMF_CHIP | MEMF_CLEAR);
+	spriteChains    = (UWORD*)AllocMem(SPR_BUFFER_BYTES, MEMF_CHIP | MEMF_CLEAR);
 	copperLists[0]  = (USHORT*)AllocMem(1024, MEMF_CHIP | MEMF_CLEAR);
 	copperLists[1]  = (USHORT*)AllocMem(1024, MEMF_CHIP | MEMF_CLEAR);
 
@@ -94,7 +99,7 @@ int main() {
 	mapData = (UBYTE*)AllocMem(MAP_BYTES, MEMF_PUBLIC | MEMF_CLEAR);
 
 	if (!playfieldBuffer || !tileSheet || !hudBuffer || !playerSheet || !bulletSheet ||
-	    !copperLists[0] || !copperLists[1] || !mapData) {
+	    !spriteSheet || !spriteChains || !copperLists[0] || !copperLists[1] || !mapData) {
 		KPrintF("Memory allocation failed!\n");
 		warpmode(0);
 		Exit(0);
@@ -105,6 +110,7 @@ int main() {
 	generateMap(mapData);
 	generatePlayerBobs(playerSheet);
 	generateBulletBobs(bulletSheet);
+	generateBulletSprites(spriteSheet);
 	initHUD(hudBuffer);
 	entitiesInit(startX, startY);
 
@@ -134,9 +140,16 @@ int main() {
 
 	initPlayfield(playfieldBuffer, tileSheet, mapData, camX, camY);
 
+	// Sprite chains, empty to start with: spritesBuild always writes all eight pointers, so the
+	// unused channels get a bare terminator rather than whatever the OS left in SPRxPT.
+	SpriteEnt    bulletEnts[MAX_BULLETS];
+	UBYTE        bulletPlaced[MAX_BULLETS];
+	const UWORD* sprChains[SPR_TOTAL];
+	spritesBuild(spriteChains, spriteSheet, bulletEnts, 0, sprChains, bulletPlaced, camX, camY);
+
 	// Build initial copper lists
-	buildCopperList(copperLists[0], camX, camY, playfieldBuffer, hudBuffer);
-	buildCopperList(copperLists[1], camX, camY, playfieldBuffer, hudBuffer);
+	buildCopperList(copperLists[0], camX, camY, playfieldBuffer, hudBuffer, sprChains);
+	buildCopperList(copperLists[1], camX, camY, playfieldBuffer, hudBuffer, sprChains);
 
 	debug_register_bitmap(playfieldBuffer, "playfield.bpl", PLAYFIELD_W, PLAYFIELD_H, BITPLANES, debug_resource_bitmap_interleaved);
 	debug_register_palette(gamePalette, "playfield.pal", 32, 0);
@@ -150,7 +163,7 @@ int main() {
 	int copperIdx = 0;
 	custom->cop1lc = (ULONG)copperLists[copperIdx];
 	custom->copjmp1 = 0x7fff; // start copper
-	custom->dmacon = DMAF_SETCLR | DMAF_MASTER | DMAF_RASTER | DMAF_COPPER | DMAF_BLITTER;
+	custom->dmacon = DMAF_SETCLR | DMAF_MASTER | DMAF_RASTER | DMAF_COPPER | DMAF_BLITTER | DMAF_SPRITE;
 
 	// Install VBL interrupt handler
 	SetInterruptHandler((APTR)interruptHandler);
@@ -164,8 +177,10 @@ int main() {
 
 	bool stressKeyPrev = false;
 	int  liveBobs = 0;
+	int  spriteBullets = 0;
 	int  peakLine = 0;
 	int  peakBobs = 0;
+	int  hudTick  = 0;   // HUD refresh cadence: loop iterations, not VBLs
 
 	// 6. Main 50Hz Game Loop
 	while (!MouseLeft() && !keyEscPressed()) {
@@ -173,6 +188,7 @@ int main() {
 		// The playfield is single-buffered, so every bob blit from here on is racing the raster
 		// down the screen -- that race is what the M2 gate is judging.
 		WaitLine(0x10);
+		const short fStart = frameCounter;   // paired with fEnd below, to unwrap the line measure
 
 		// 6a. Put the background back under last frame's bobs, before anything moves. The
 		// records carry their own buffer slots, so this is independent of where the camera is.
@@ -208,12 +224,18 @@ int main() {
 			lastTileY = curTileY;
 		}
 
+		// 6d2. Hand the live bullets to the sprite multiplexer. Whatever it places costs the
+		// blitter nothing; what it cannot place falls through to a bob below.
+		const int nBullets = entitiesBullets(bulletEnts);
+		spriteBullets = spritesBuild(spriteChains, spriteSheet, bulletEnts, nBullets,
+		                             sprChains, bulletPlaced, camX, camY);
+
 		// 6e. Draw the bobs and remember what to restore next frame
-		liveBobs = entitiesDraw(&ctx, playerSheet, bulletSheet, frameCounter);
+		liveBobs = entitiesDraw(&ctx, playerSheet, bulletSheet, bulletPlaced, frameCounter);
 
 		// 6f. Hand the new camera position to the copper
 		copperIdx ^= 1;
-		buildCopperList(copperLists[copperIdx], camX, camY, playfieldBuffer, hudBuffer);
+		buildCopperList(copperLists[copperIdx], camX, camY, playfieldBuffer, hudBuffer, sprChains);
 		custom->cop1lc = (ULONG)copperLists[copperIdx];
 
 		// How far down the frame all of that got, blitter included. Past 312 is a dropped frame.
@@ -222,10 +244,15 @@ int main() {
 		// per-pixel CPU work on the HUD bitmap, far too expensive to do at 50Hz, and it would
 		// distort the number it is reporting.
 		WaitBlt();
-		const int rasterLine = (int)((*(volatile ULONG*)0xdff004 >> 8) & 511);
+		// vposr wraps at 313, so a frame that overruns the VBL reads back as a *small* line number
+		// and looks fast -- 24 bobs measured 062 before this, when the truth was 1316. Count the
+		// VBLs the frame crossed and unwrap, so the number keeps meaning what it says it means.
+		const short fEnd = frameCounter;
+		int rasterLine = (int)((*(volatile ULONG*)0xdff004 >> 8) & 511);
+		rasterLine += 313 * (int)(short)(fEnd - fStart);
 		if (rasterLine > peakLine) peakLine = rasterLine;
 		if (liveBobs > peakBobs)  peakBobs = liveBobs;
-		if ((frameCounter & 15) == 0) {
+		if ((++hudTick & 15) == 0) {
 			hudSetCounters(hudBuffer, peakBobs, peakLine);
 			peakLine = 0;
 			peakBobs = 0;
@@ -242,6 +269,8 @@ int main() {
 	FreeMem(hudBuffer, HUD_BYTES);
 	FreeMem(playerSheet, CLASS_BOB_BYTES);
 	FreeMem(bulletSheet, BULLET_SHEET_BYTES);
+	FreeMem(spriteSheet, SPR_SHEET_BYTES);
+	FreeMem(spriteChains, SPR_BUFFER_BYTES);
 	FreeMem(copperLists[0], 1024);
 	FreeMem(copperLists[1], 1024);
 	FreeMem(mapData, MAP_BYTES);

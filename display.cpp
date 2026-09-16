@@ -1,5 +1,6 @@
 #include "display.h"
 #include "copper.h"
+#include "sprites.h"
 #include "tiles.h"
 #include "map.h"
 #include "system.h"
@@ -7,22 +8,30 @@
 
 extern volatile struct Custom *custom;
 
-__attribute__((always_inline)) static inline int posMod(int v, int m) {
-	int r = v % m;
-	return (r < 0) ? r + m : r;
-}
 
-void blitTile(const UBYTE* tileSheet, UBYTE* playfield, int tileIdx, int bufTileX, int bufTileY) {
+// Every tile blit in the game is the same blit: same minterm, same masks, same modulos, same
+// size. Only the two pointers change. Writing all nine registers per tile was costing more than
+// the 160 blitter cycles the transfer itself takes, so the invariants are hoisted into a setup
+// call made once per run of tiles and the inner blit writes only what varies.
+//
+// The registers stay valid until something else blits. bobDraw clobbers them, so any run of tile
+// blits has to be preceded by its own tileBlitBegin() -- see the callers in this file and
+// entitiesRestore().
+void tileBlitBegin(void) {
 	WaitBlt();
-	const UBYTE* src = tileSheet + tileIdx * TILE_BYTES;
-	UBYTE* dst = playfield + (bufTileY * TILE_SIZE * PLAYFIELD_LINE_BYTES) + (bufTileX * (TILE_SIZE / 8));
-
 	custom->bltcon0 = 0x09f0; // A_TO_D | DEST | SRCA
 	custom->bltcon1 = 0;
 	custom->bltafwm = 0xffff;
 	custom->bltalwm = 0xffff;
 	custom->bltamod = 0;
 	custom->bltdmod = PLAYFIELD_ROW_BYTES - 2;
+}
+
+void blitTile(const UBYTE* tileSheet, UBYTE* playfield, int tileIdx, int bufTileX, int bufTileY) {
+	const UBYTE* src = tileSheet + tileIdx * TILE_BYTES;
+	UBYTE* dst = playfield + (bufTileY * TILE_SIZE * PLAYFIELD_LINE_BYTES) + (bufTileX * (TILE_SIZE / 8));
+
+	WaitBlt();
 	custom->bltapt = (APTR)src;
 	custom->bltdpt = (APTR)dst;
 	custom->bltsize = ((TILE_SIZE * BITPLANES) << 6) | (TILE_SIZE / 16);
@@ -34,8 +43,8 @@ void blitTile(const UBYTE* tileSheet, UBYTE* playfield, int tileIdx, int bufTile
 // BUF_COLS apart, so the display window never straddles the end of the buffer.
 static void blitMapTile(const UBYTE* map, const UBYTE* tileSheet, UBYTE* playfield, int c, int r) {
 	const int tile = getMapTile(map, c, r);
-	const int bc   = posMod(c, BUF_COLS);
-	const int br   = posMod(r, BUF_ROWS);
+	const int bc   = wrapMod(c, BUF_COLS);
+	const int br   = wrapMod(r, BUF_ROWS);
 	blitTile(tileSheet, playfield, tile, bc, br);
 	blitTile(tileSheet, playfield, tile, bc + BUF_COLS, br);
 }
@@ -44,6 +53,7 @@ void initPlayfield(UBYTE* playfield, const UBYTE* tileSheet, const UBYTE* map, i
 	const int c0 = (startCamX / TILE_SIZE) - BUF_ANCHOR;
 	const int r0 = (startCamY / TILE_SIZE) - BUF_ANCHOR;
 
+	tileBlitBegin();
 	for (int r = r0; r < r0 + BUF_ROWS; r++)
 		for (int c = c0; c < c0 + BUF_COLS; c++)
 			blitMapTile(map, tileSheet, playfield, c, r);
@@ -56,6 +66,8 @@ void updateTileSeams(int oldTileX, int oldTileY, int newTileX, int newTileY,
 	// dropped off the far side.
 	const int c0 = newTileX - BUF_ANCHOR, r0 = newTileY - BUF_ANCHOR;
 	const int oldC0 = oldTileX - BUF_ANCHOR, oldR0 = oldTileY - BUF_ANCHOR;
+
+	tileBlitBegin();
 
 	if (newTileX != oldTileX) {
 		int first, last;
@@ -80,16 +92,27 @@ void updateTileSeams(int oldTileX, int oldTileY, int newTileX, int newTileY,
 	}
 }
 
-USHORT* buildCopperList(USHORT* copList, int camX, int camY, const UBYTE* playfield, const UBYTE* hud) {
+USHORT* buildCopperList(USHORT* copList, int camX, int camY, const UBYTE* playfield, const UBYTE* hud,
+                        const UWORD* const* sprChains) {
 	USHORT* copPtr = copList;
 
 	int bufX = playfieldReadX(camX);
-	int bufY = camY % PLAYFIELD_H;
+	int bufY = wrapMod(camY, PLAYFIELD_H);
 	int wordOffset = (bufX / 16) * 2;
 	int subX = 15 - (camX & 15);
 	UWORD bplcon1_val = subX | (subX << 4);
 
 	copPtr = screenScanDefault(copPtr);
+
+	// Sprite pointers. Rebuilt every frame because the chains are rebuilt every frame; channels
+	// with no bullets on them get a bare terminator and fetch nothing.
+	for (int s = 0; s < SPR_TOTAL; s++) {
+		const ULONG addr = (ULONG)sprChains[s];
+		*copPtr++ = offsetof(struct Custom, sprpt[0]) + s * sizeof(APTR);
+		*copPtr++ = (UWORD)(addr >> 16);
+		*copPtr++ = offsetof(struct Custom, sprpt[0]) + s * sizeof(APTR) + 2;
+		*copPtr++ = (UWORD)addr;
+	}
 
 	// 32 Colors from gamePalette
 	for (int i = 0; i < 32; i++) {
@@ -206,15 +229,15 @@ void initHUD(UBYTE* hudBuffer) {
 }
 
 void hudSetCounters(UBYTE* hudBuffer, int bobs, int rasterLine) {
-	char digits[4];
+	char digits[6];
 
 	if (bobs > 99) bobs = 99;
 	clearHudBox(hudBuffer, 248, 20, 24, 8);
 	formatNumber(digits, bobs, 2);
 	drawTextPlanar(hudBuffer, HUD_LINE_BYTES, HUD_BITPLANES, 248, 20, digits, 7);
 
-	if (rasterLine > 999) rasterLine = 999;
-	clearHudBox(hudBuffer, 248, 32, 24, 8);
-	formatNumber(digits, rasterLine, 3);
+	if (rasterLine > 9999) rasterLine = 9999;
+	clearHudBox(hudBuffer, 248, 32, 40, 8);
+	formatNumber(digits, rasterLine, 4);
 	drawTextPlanar(hudBuffer, HUD_LINE_BYTES, HUD_BITPLANES, 248, 32, digits, 7);
 }

@@ -77,8 +77,12 @@ configuration, since that is the shipping target and not merely a compatibility 
   C++ exceptions, RTTI, or `new`/`delete`.
 - `out/a.s` is a full annotated disassembly of the linked binary — the fastest way to check what the
   compiler did to a hot loop.
-- `obj/DELETE.ME` and `out/DELETE.ME` are tracked placeholders keeping those directories in git.
-  `make clean` deletes them; restore with `git checkout obj out`.
+- **`obj/` and `out/` are not in git and the Makefile does not create them.** Everything they hold
+  is gitignored, they once had `DELETE.ME` placeholders to keep them in the tree, and 8e8f60f
+  removed those — so a fresh clone has neither directory and the first build dies with
+  `fatal error: opening dependency file obj/tiles.d: No such file or directory`. `mkdir -p obj out`
+  once after cloning. `make clean` empties them but leaves them in place, so this only bites on a
+  fresh clone, never afterwards.
 
 
 ## Architecture
@@ -97,6 +101,7 @@ through, so follow them rather than replacing them.
 | `tiles.cpp` / `.h` | The 32-colour palette, the procedural tile sheet, `drawTextPlanar` |
 | `map.cpp` / `.h` | The procedural 128x128 Chorley map and `getMapTile` |
 | `bob.cpp` / `.h` | `bobDraw`/`bobRestore` and the procedural player and bullet bobs |
+| `sprites.cpp` / `.h` | Bullets on hardware sprite channels 6-7, with vertical multiplexing |
 | `player.cpp` / `.h` | Player state, eight-way move and fire, the bullet pool, the camera |
 | `keyboard.cpp` / `.h` | Raw CIA-A keyboard polling |
 | `music.cpp` / `.h` | The P61 glue |
@@ -195,6 +200,20 @@ Single-buffered: bobs are drawn straight into the displayed playfield. Tiles go 
 `A_TO_D` blit (`bltcon0 = 0x09f0`), bobs with the cookie-cut minterm `0xca` described above. Every
 blitter register write must be preceded by `WaitBlt()` — the local OS-free one in `system.h`, never
 graphics.library's.
+
+Two rules came out of the M2 gate and both are load-bearing:
+
+- **Never write `%` in a per-frame path.** The 68000 has no 32-bit divide, so GCC lowers a modulo
+  by a non-power-of-two into a `__divsi3` call costing a few hundred cycles. Use `wrapMod()` from
+  `game/gamedefs.h`. This was roughly a third of the seam cost before it was found.
+- **Hoist invariant blitter registers out of runs of small blits.** Setting up a tile blit cost
+  more than the 160-cycle transfer it wrapped. `tileBlitBegin()` writes everything every tile blit
+  shares, and `blitTile` then writes only the two pointers — so any run of `blitTile` calls must be
+  preceded by `tileBlitBegin()`, and anything else that blits in between invalidates it.
+
+Bullets do not use the blitter at all: `sprites.cpp` packs them onto sprite channels 6 and 7,
+chaining several down the screen per channel. Two bullets whose rows overlap need two channels, so
+what will not fit falls back to `bobDraw` — the fallback is what keeps the worst case bounded.
 
 The HUD occupies lines 252-255 and below via a copper split down to `HUD_BITPLANES` planes, drawn
 into its own buffer by `initHUD` and updated each frame by `hudSetCounters`.

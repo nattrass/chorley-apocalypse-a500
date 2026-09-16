@@ -63,6 +63,21 @@
 
 #define PLAYFIELD_MODULO (PLAYFIELD_ROW_BYTES * (BITPLANES - 1) + (PLAYFIELD_ROW_BYTES - SCREEN_W / 8))
 
+// Wrapping a world coordinate into a buffer slot, without a divide.
+//
+// The 68000 has no 32-bit division, so GCC lowers `%` to a __divsi3 call -- a software routine
+// costing a few hundred cycles. The tile path was paying two of those per tile and the bob path
+// two per bob, which measured as roughly 45 of the 125 raster lines a column seam was costing.
+// None of the moduli here are powers of two (BUF_COLS 24, BUF_ROWS 17, PLAYFIELD_H 272,
+// PLAYFIELD_HALF_W 384), so masking is out -- but every value handed to these is already within
+// a few periods of the range, so repeated subtraction is both exact and an order of magnitude
+// cheaper than the call.
+__attribute__((always_inline)) static inline int wrapMod(int v, int m) {
+	while (v >= m) v -= m;
+	while (v < 0)  v += m;
+	return v;
+}
+
 // --- Map -----------------------------------------------------------------------------------
 // Tile index layer + attribute layer, both in slow RAM.
 
@@ -111,6 +126,11 @@
 // --- Chip RAM budget -----------------------------------------------------------------------
 // Reserves for subsystems not yet written, so the budget stays honest as they land.
 
+// Sprite chains and the bullet sprite sheet. Both are DMA-visible, so both are chip. The
+// numbers are derived in sprites.h; repeated here because gamedefs.h is the budget and must
+// not depend on a header that depends on it.
+#define BUDGET_SPRITES       7200
+
 #define BUDGET_ENEMY_BOBS   40000
 #define BUDGET_FX_BOBS      10000
 #define BUDGET_MODULE       60000
@@ -122,6 +142,7 @@
 	TILESHEET_BYTES + \
 	(CLASS_BOB_BYTES * PLAYERS_LOADED) + \
 	HUD_BYTES + \
+	BUDGET_SPRITES + \
 	BUDGET_ENEMY_BOBS + BUDGET_FX_BOBS + BUDGET_MODULE + \
 	BUDGET_COPPERLISTS + BUDGET_SCRATCH)
 

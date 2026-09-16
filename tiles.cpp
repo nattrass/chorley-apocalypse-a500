@@ -32,9 +32,12 @@ const UWORD gamePalette[32] = {
 	0x0705, // 26: Deep signal magenta
 	0x0e1b, // 27: Vibrant neon magenta
 	0x0b22, // 28: Health / danger red
-	0x0eb2, // 29: Gold / pickup yellow
-	0x039e, // 30: Shield / power blue
-	0x0fff  // 31: Pure white text
+	// 29-31 are sprite channel 6/7's colour triple, which is where the bullets live. With 5
+	// bitplanes the playfield owns these same registers, so this is what putting bullets on
+	// sprites costs the tile art -- one triple, and only the hazard stripes had to move (to 23).
+	0x0541, // 29: Bullet tail (tarnished brass)  - sprite colour 1
+	0x00cf, // 30: Bullet core (broadcast cyan)   - sprite colour 2
+	0x0fff  // 31: Bullet head / pure white text  - sprite colour 3
 };
 
 // 3x5 font for numbers 0-9
@@ -236,7 +239,7 @@ void generateTileSheet(UBYTE* tileSheet) {
 					c = ((x * 11 + y * 5) & 3) ? 14 : 15;
 					break;
 				case 14: // Hazard Stripes (Yellow / Black diagonal)
-					c = ((x + y) % 6 < 3) ? 29 : 0;
+					c = ((x + y) % 6 < 3) ? 23 : 0;   // 23, not 29: 29 is now a sprite colour
 					break;
 				case 15: // Warning Border / Secondary Hazard
 					c = ((x - y + 16) % 6 < 3) ? 28 : 12;

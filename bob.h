@@ -44,7 +44,9 @@ struct BobRect {
 // which case rec is not filled in.
 bool bobDraw(const RenderCtx* ctx, const UBYTE* frame, int srcWords, int h, int wx, int wy, BobRect* rec);
 
-// Put the background back by re-blitting the map tiles the rect covered.
+// Put the background back by re-blitting the map tiles the rect covered. Blits through
+// blitTile, so the caller must have run tileBlitBegin() since anything else last used the
+// blitter -- entitiesRestore() does it once for the whole run.
 void bobRestore(const RenderCtx* ctx, const BobRect* rec);
 
 // Procedural placeholder art, generated at startup inside warpmode().
